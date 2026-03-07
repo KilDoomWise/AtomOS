@@ -27,7 +27,7 @@
 
 
 ```
-wget -q [https://raw.githubusercontent.com/KilDoomWise/AtomOS/refs/heads/main/Installer/openos.lua](https://raw.githubusercontent.com/KilDoomWise/AtomOS/refs/heads/main/Installer/openos.lua) /tmp/installer.lua && /tmp/installer.lua
+wget -q https://raw.githubusercontent.com/KilDoomWise/AtomOS/refs/heads/main/Installer/openos.lua /tmp/installer.lua && /tmp/installer.lua
 ```
 
 4. Once the automated installer starts, follow the on-screen instructions.
