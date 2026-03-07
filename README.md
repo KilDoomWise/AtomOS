@@ -1,6 +1,8 @@
 # Atom OS
 **A Lightweight Microkernel Operating System for OpenComputers (Minecraft)**
 
+> In RU: [ЧИТАТЬ](https://github.com/KilDoomWise/AtomOS/blob/main/README_RU.md)
+
 Atom OS is a minimalist operating system built from scratch with a focus on clean architecture, low resource footprint, and a user-friendly developer experience. It relies on a modular approach, strict privilege separation, and isolated execution environments instead of shared global states.
 
 ## Architectural Features
