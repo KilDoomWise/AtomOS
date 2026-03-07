@@ -25,18 +25,17 @@ end
 
 -- Синхронно ждать конкретного события (с таймаутом)
 function event.pull(timeout, filter)
-  local io = require("io")
-  local start = io.uptime()
+  local uptime = function() return unit.call("aio", "uptime") end
+  local deadline = timeout and (uptime() + timeout) or nil
   while true do
+    if deadline and uptime() >= deadline then return nil end
     local sig = {coroutine.yield()}
     if #sig > 0 then
       if not filter or sig[1] == filter then
         return table.unpack(sig)
       end
     end
-    if timeout and (io.uptime() - start >= timeout) then
-      return nil
-    end
+    if deadline and uptime() >= deadline then return nil end
   end
 end
 

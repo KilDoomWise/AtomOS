@@ -21,4 +21,7 @@ function agpu.fill(x, y, w, h, c) return agpu.i(agpu.addr, "fill", x, y, w, h, c
 function agpu.set(x, y, v) return agpu.i(agpu.addr, "set", x, y, v) end
 function agpu.copy(x, y, w, h, tx, ty) return agpu.i(agpu.addr, "copy", x, y, w, h, tx, ty) end
 
+function agpu.getDepth()       return agpu.i(agpu.addr, "getDepth")        end
+function agpu.maxResolution()  return agpu.i(agpu.addr, "maxResolution")   end
+
 return agpu

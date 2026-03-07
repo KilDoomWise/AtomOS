@@ -30,14 +30,18 @@ return function(args, api)
     return
   end
 
-  api.print("Downloading...")
+  api.write("Downloading ")
   local data = ""
+  local bytes = 0
   while true do
-    local chunk = handle.read(math.huge)
-    if not chunk then break end
-    data = data .. chunk
-    gpu.fill(1, 19, 1, 1, ".") -- Индикатор активности (просто точка где-то)
+    local ok, chunk = pcall(function() return handle.read(4096) end)
+    if not ok or not chunk then break end
+    data  = data .. chunk
+    bytes = bytes + #chunk
+    if bytes % 8192 < 4096 then api.write(".") end
   end
+  handle.close()
+  api.write(" " .. bytes .. " bytes\n")
   handle.close()
 
   api.print("Saving to " .. target .. " ...")

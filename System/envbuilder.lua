@@ -21,7 +21,14 @@ function env.create()
   e.next = next
   e.select = select
   e.load = load
-  
+  e.setmetatable = setmetatable
+  e.getmetatable = getmetatable
+  e.rawget = rawget
+  e.rawset = rawset
+  e.rawequal = rawequal
+  e.rawlen = rawlen
+  e._G = e
+
   e.require = function(path)
     local code = u.call("atfs", "readAll", "/Libraries/" .. path .. ".lua")
     if not code then e.error("Library not found: " .. path) end

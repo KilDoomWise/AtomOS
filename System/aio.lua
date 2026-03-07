@@ -29,4 +29,16 @@ function aio.shutdown(reboot)
   computer.shutdown(reboot)
 end
 
+function aio.totalMemory()    return computer.totalMemory()  end
+function aio.freeMemory()     return computer.freeMemory()   end
+function aio.energy()         return computer.energy()        end
+function aio.maxEnergy()      return computer.maxEnergy()     end
+function aio.getBootAddress() return computer.getBootAddress() end
+
+function aio.componentCount()
+  local n = 0
+  for _ in component.list() do n = n + 1 end
+  return n
+end
+
 return aio

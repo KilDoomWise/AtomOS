@@ -13,4 +13,7 @@ function g.fill(x, y, w, h, c) return unit.call("agpu", "fill", x, y, w, h, c) e
 function g.set(x, y, v) return unit.call("agpu", "set", x, y, v) end
 function g.copy(x, y, w, h, tx, ty) return unit.call("agpu", "copy", x, y, w, h, tx, ty) end
 
+function g.getDepth()      return unit.call("agpu", "getDepth")      end
+function g.maxResolution() return unit.call("agpu", "maxResolution") end
+
 return g

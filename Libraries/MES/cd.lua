@@ -2,7 +2,7 @@ return function(args, api)
   local fs = require("filesystem")
   local path = args[1]
   if not path then
-    api.setCwd("/")
+    api.setCwd(api.getHome())
     return
   end
   local target = api.resolve(path)
