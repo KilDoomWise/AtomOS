@@ -141,7 +141,6 @@ end
 local function sleep(t) computer.pullSignal(t) end
 
 -- ── Splash ────────────────────────────────────────────────────────────────────
--- "ATOM OS" in ANSI Shadow font, light-to-dark gray gradient
 local ART = {
   {" █████╗ ████████╗ ██████╗ ███╗   ███╗  ██████╗ ███████╗", 0xEEEEEE},
   {"██╔══██╗╚══██╔══╝██╔═══██╗████╗ ████║ ██╔═══██╗██╔════╝", 0xCCCCCC},
@@ -264,19 +263,48 @@ local function showConfirm(d)
   end
 end
 
--- ── HTTP download ──────────────────────────────────────────────────────────────
-local function httpGet(url)
-  local ok, h = pcall(inet.request, url)
-  if not ok or not h then return nil, tostring(h) end
-  local buf  = {}
-  local dead = computer.uptime() + 30
-  while computer.uptime() < dead do
-    local ok2, chunk = pcall(h.read, 65536)
-    if ok2 then
-      if chunk and #chunk > 0 then
-        buf[#buf + 1] = chunk
+-- ── Core FS & Network Logic ────────────────────────────────────────────────────
+local function formatDrive(addr)
+  local proxy = component.proxy(addr)
+  local list = proxy.list("/")
+  if list then
+    for _, file in ipairs(list) do
+      proxy.remove(file)
+    end
+  end
+end
+
+local function downloadAndWrite(addr, url, path)
+  -- Создаем папки
+  local parts = {}
+  for p in path:gmatch("[^/]+") do parts[#parts + 1] = p end
+  table.remove(parts)
+  local dir = ""
+  for _, p in ipairs(parts) do
+    dir = dir .. "/" .. p
+    component.invoke(addr, "makeDirectory", dir)
+  end
+
+  -- Открываем файл
+  local handle, err = component.invoke(addr, "open", "/" .. path, "w")
+  if not handle then return false, "open err: " .. tostring(err) end
+
+  -- Дергаем инет
+  local ok, req = pcall(inet.request, url)
+  if not ok or not req then
+    component.invoke(addr, "close", handle)
+    return false, "req err: " .. tostring(req)
+  end
+
+  -- Стримим данные на диск
+  while true do
+    local rok, chunk = pcall(req.read, math.huge)
+    if rok then
+      if chunk == nil then break
+      elseif #chunk > 0 then
+        component.invoke(addr, "write", handle, chunk)
       else
-        break  -- EOF
+        sleep(0.05)
       end
     else
       if tostring(chunk):find("not connected") then
@@ -286,30 +314,9 @@ local function httpGet(url)
       end
     end
   end
-  pcall(h.close)
-  local data = table.concat(buf)
-  if #data == 0 then return nil, "empty response" end
-  return data
-end
 
--- ── Filesystem writer ──────────────────────────────────────────────────────────
-local function ensureDirs(addr, path)
-  local parts = {}
-  for p in path:gmatch("[^/]+") do parts[#parts + 1] = p end
-  table.remove(parts)  -- strip filename
-  local dir = ""
-  for _, p in ipairs(parts) do
-    dir = dir .. "/" .. p
-    pcall(component.invoke, addr, "makeDirectory", dir)
-  end
-end
-
-local function writeFile(addr, path, data)
-  ensureDirs(addr, path)
-  local h = component.invoke(addr, "open", "/" .. path, "w")
-  if not h then return false end
-  component.invoke(addr, "write", h, data)
-  component.invoke(addr, "close", h)
+  pcall(req.close)
+  component.invoke(addr, "close", handle)
   return true
 end
 
@@ -353,32 +360,24 @@ local function doInstall(drive)
   titleBar("Installing...")
   hline(H - 2)
 
+  -- Форматирование
+  statusBar("Formatting drive...", C.DIM)
+  pushLog("  ►  Formatting drive " .. drive.short .. "...", C.BLUE)
+  formatDrive(drive.addr)
+  pushLog("  ✔  Drive formatted completely", C.OK)
+  sleep(0.5)
+
+  -- Установка файлов
   for idx, file in ipairs(FILES) do
     drawProgress(idx - 1, file, true)
 
-    -- Download with one retry
-    local data, err
-    for attempt = 1, 2 do
-      data, err = httpGet(BASE .. file)
-      if data then break end
-      if attempt == 1 then
-        statusBar("Retrying  " .. file .. "...", C.ERR)
-        sleep(1.5)
-      end
-    end
+    local ok, err = downloadAndWrite(drive.addr, BASE .. file, file)
 
-    if not data then
+    if not ok then
       pushLog("  ✘  " .. file .. "  (" .. tostring(err) .. ")", C.ERR)
-      statusBar("FATAL: download failed — " .. file, C.ERR)
-      sleep(3)
-      return false, "download failed: " .. file
-    end
-
-    if not writeFile(drive.addr, file, data) then
-      pushLog("  ✘  write error: " .. file, C.ERR)
-      statusBar("FATAL: write failed — " .. file, C.ERR)
-      sleep(3)
-      return false, "write failed: " .. file
+      statusBar("FATAL: " .. tostring(err), C.ERR)
+      sleep(4)
+      return false, "failed: " .. file
     end
 
     drawProgress(idx, file, false)
