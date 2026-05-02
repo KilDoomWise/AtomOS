@@ -1,6 +1,7 @@
 local gpu  = require("graphics")
 local fs   = require("filesystem")
 local auth = require("auth")
+local diagnostics = require("diagnostics")
 
 auth.initSystem()
 
@@ -8,37 +9,193 @@ local w, h = gpu.getResolution()
 local cx, cy = 1, 1
 local cwd = "/"
 local cmd_history = {}
+local MAX_SCROLLBACK = 200
+local BG, FG = 0x000000, 0xFFFFFF
 
 -- Session state
 local current_user = "root"
 local hostname     = auth.getHostname()
 
 local api = {}
+local SESSION_TOKEN = {}
 
-local function scroll_up()
-  gpu.copy(1, 2, w, h - 1, 0, -1)
-  gpu.setBackground(0x000000)
-  gpu.fill(1, h, w, 1, " ")
-  cy = h
+local term_lines = {
+  { text = "", runs = {} }
+}
+local view_offset = 0
+
+local function new_line()
+  term_lines[#term_lines + 1] = { text = "", runs = {} }
+  while #term_lines > MAX_SCROLLBACK do
+    table.remove(term_lines, 1)
+  end
+end
+
+local function append_run(line, text, fg, bg)
+  if not text or text == "" then return end
+  fg, bg = fg or FG, bg or BG
+  line.text = line.text .. text
+  local last = line.runs[#line.runs]
+  if last and last.fg == fg and last.bg == bg then
+    last.text = last.text .. text
+  else
+    line.runs[#line.runs + 1] = { text = text, fg = fg, bg = bg }
+  end
+end
+
+local function clamp_view()
+  local maxOffset = math.max(0, #term_lines - h)
+  if view_offset < 0 then view_offset = 0 end
+  if view_offset > maxOffset then view_offset = maxOffset end
+end
+
+local function update_cursor()
+  local start = math.max(1, #term_lines - h + 1)
+  local line = term_lines[#term_lines]
+  cx = unicode.len(line.text) + 1
+  cy = #term_lines - start + 1
+end
+
+local function render_line(line, y)
+  gpu.setBackground(BG)
+  gpu.setForeground(FG)
+  gpu.fill(1, y, w, 1, " ")
+  if not line then return end
+
+  local x = 1
+  for _, run in ipairs(line.runs) do
+    if x > w then break end
+    local text = unicode.sub(run.text, 1, w - x + 1)
+    if text ~= "" then
+      gpu.setForeground(run.fg or FG)
+      gpu.setBackground(run.bg or BG)
+      gpu.set(x, y, text)
+      x = x + unicode.len(text)
+    end
+  end
+end
+
+local function render_terminal()
+  clamp_view()
+  local start = math.max(1, #term_lines - h + 1 - view_offset)
+  for row = 1, h do
+    render_line(term_lines[start + row - 1], row)
+  end
+
+  if view_offset > 0 then
+    local tag = "[scroll +" .. tostring(view_offset) .. "]"
+    gpu.setBackground(BG)
+    gpu.setForeground(0x777777)
+    gpu.set(math.max(1, w - unicode.len(tag) + 1), 1, tag)
+  end
+
+  update_cursor()
+end
+
+local function advance_screen_line()
+  if cy >= h then
+    gpu.copy(1, 2, w, h - 1, 0, -1)
+    gpu.setBackground(BG)
+    gpu.fill(1, h, w, 1, " ")
+    cy = h
+  else
+    cy = cy + 1
+  end
+  cx = 1
+end
+
+local function redraw_current_line_from(start_x, text, fg, bg)
+  local src = term_lines[#term_lines]
+  local keep = math.max(0, start_x - 1)
+  local dst = { text = "", runs = {} }
+
+  for _, run in ipairs(src.runs) do
+    if keep <= 0 then break end
+    local take = math.min(keep, unicode.len(run.text))
+    if take > 0 then
+      append_run(dst, unicode.sub(run.text, 1, take), run.fg, run.bg)
+      keep = keep - take
+    end
+  end
+
+  append_run(dst, text, fg or FG, bg or BG)
+  term_lines[#term_lines] = dst
+
+  if view_offset ~= 0 then
+    view_offset = 0
+    render_terminal()
+  else
+    render_line(dst, cy)
+    update_cursor()
+  end
+end
+
+local function draw_block_cursor(x, y, ch)
+  if x < 1 or x > w or y < 1 or y > h then return end
+  gpu.setBackground(FG)
+  gpu.setForeground(BG)
+  gpu.set(x, y, ch ~= "" and ch or " ")
+  gpu.setBackground(BG)
+  gpu.setForeground(FG)
+end
+
+local function scroll_terminal(direction)
+  view_offset = view_offset + (direction or 0) * 3
+  clamp_view()
+  render_terminal()
 end
 
 function api.write(txt)
-  for i = 1, unicode.len(txt) do
-    local ch = unicode.sub(txt, i, i)
-    if ch == "\n" then
-      cx = 1
-      cy = cy + 1
-      if cy > h then scroll_up() end
+  txt = tostring(txt or "")
+  local fg = gpu.getForeground() or FG
+  local bg = gpu.getBackground() or BG
+
+  if view_offset ~= 0 then
+    view_offset = 0
+    render_terminal()
+  end
+
+  local pos = 1
+  local len = unicode.len(txt)
+  while pos <= len do
+    local line = term_lines[#term_lines]
+    local used = unicode.len(line.text)
+    local free = w - used
+
+    if free <= 0 then
+      new_line()
+      advance_screen_line()
     else
-      gpu.set(cx, cy, ch)
-      cx = cx + 1
-      if cx > w then
-        cx = 1
-        cy = cy + 1
-        if cy > h then scroll_up() end
+      local chunk = unicode.sub(txt, pos, pos + free - 1)
+      local nl = chunk:find("\n", 1, true)
+
+      if nl then
+        chunk = chunk:sub(1, nl - 1)
+      end
+
+      if chunk ~= "" then
+        append_run(line, chunk, fg, bg)
+        gpu.setForeground(fg)
+        gpu.setBackground(bg)
+        gpu.set(used + 1, cy, chunk)
+        used = used + unicode.len(chunk)
+        cx = used + 1
+        pos = pos + unicode.len(chunk)
+      end
+
+      if nl then
+        pos = pos + 1
+        new_line()
+        advance_screen_line()
+      elseif used >= w then
+        new_line()
+        advance_screen_line()
       end
     end
   end
+
+  gpu.setForeground(fg)
+  gpu.setBackground(bg)
 end
 
 function api.print(...)
@@ -53,9 +210,10 @@ end
 _ENV.print = function(...) api.print(...) end
 
 function api.clear()
-  gpu.setBackground(0x000000)
-  gpu.fill(1, 1, w, h, " ")
+  term_lines = { { text = "", runs = {} } }
+  view_offset = 0
   cx, cy = 1, 1
+  render_terminal()
 end
 
 function api.getCwd()    return cwd end
@@ -66,13 +224,29 @@ function api.setCursor(x, y) cx, cy = x, y end
 function api.getUser()
   return auth.getUser(current_user) or { name = current_user, uid = 0, home = "/root" }
 end
-function api.setUser(name)
+
+local function setUserInternal(name)
   local u = auth.getUser(name)
   if not u then return false, "no such user" end
   current_user = name
   cwd = u.home
   return true
 end
+
+function api.setUser(name, token)
+  if token ~= SESSION_TOKEN then return false, "permission denied" end
+  return setUserInternal(name)
+end
+
+function api.login(name, password)
+  local target = auth.getUser(name)
+  if not target then return false, "no such user" end
+  if current_user ~= "root" and not auth.verify(name, password or "") then
+    return false, "authentication failure"
+  end
+  return setUserInternal(name)
+end
+
 function api.getHome()
   local u = auth.getUser(current_user)
   return u and u.home or "/root"
@@ -85,6 +259,16 @@ function api.setHostname(name)
 end
 function api.isRoot() return current_user == "root" end
 
+function api.securityContext()
+  local u = api.getUser()
+  return {
+    user = u.name,
+    uid = u.uid,
+    home = u.home,
+    root = (u.uid == 0 or u.name == "root")
+  }
+end
+
 -- Blocking line-read used by commands that need interactive input.
 -- mask=true replaces typed chars with '*' (for passwords).
 function api.readLine(prompt, mask)
@@ -95,15 +279,10 @@ function api.readLine(prompt, mask)
   local sx, sy = cx, cy
   local buf = ""
   local function redraw()
-    gpu.setBackground(0x000000)
-    gpu.fill(sx, sy, w - sx + 1, 1, " ")
-    gpu.setForeground(0xFFFFFF)
     local display = mask and string.rep("*", unicode.len(buf)) or buf
-    if #display > 0 then gpu.set(sx, sy, unicode.sub(display, 1, w - sx + 1)) end
+    redraw_current_line_from(sx, display, FG, BG)
     local curX = sx + unicode.len(display)
-    gpu.setBackground(0xFFFFFF); gpu.setForeground(0x000000)
-    gpu.set(curX, sy, " ")
-    gpu.setBackground(0x000000); gpu.setForeground(0xFFFFFF)
+    draw_block_cursor(curX, sy, " ")
   end
   redraw()
   while true do
@@ -111,10 +290,8 @@ function api.readLine(prompt, mask)
     if sig[1] == "key_down" then
       local char, code = sig[3], sig[4]
       if code == 28 then
-        gpu.setBackground(0x000000)
-        gpu.fill(sx, sy, w - sx + 1, 1, " ")
         local display = mask and string.rep("*", unicode.len(buf)) or buf
-        if #display > 0 then gpu.set(sx, sy, display) end
+        redraw_current_line_from(sx, display, FG, BG)
         cx = sx + unicode.len(display); cy = sy
         api.write("\n")
         return buf
@@ -128,6 +305,9 @@ function api.readLine(prompt, mask)
     elseif sig[1] == "clipboard" then
       buf = buf .. sig[3]
       redraw()
+    elseif sig[1] == "scroll" then
+      scroll_terminal(sig[5] or 0)
+      if view_offset == 0 then redraw() end
     end
   end
 end
@@ -151,23 +331,98 @@ function api.resolve(path)
 end
 
 local cmds = {}
+local cmdLoadErrors = {}
+local COMMAND_CAPS = {
+  passwd = { "fs.system" }
+}
+
+local function commandContext(name)
+  local ctx = api.securityContext()
+  if COMMAND_CAPS[name] then
+    ctx.caps = COMMAND_CAPS[name]
+  end
+  return ctx
+end
+
 do
   local files = fs.list("/Libraries/MES")
   if files then
     for _, f in ipairs(files) do
       if f:sub(-4) == ".lua" then
-        local code = fs.readAll("/Libraries/MES/" .. f)
+        local path = "/Libraries/MES/" .. f
+        local code = fs.readAll(path)
         if code then
-          local fn, lerr = load(code, "=" .. f, "bt", _ENV)
+          local fn, lerr = load(code, "=" .. path, "bt", _ENV)
           if fn then
-            local ok, result = pcall(fn)
+            local ok, result = xpcall(fn, function(e)
+              return diagnostics.make(e, nil, path)
+            end)
             if ok and type(result) == "function" then
               cmds[f:sub(1, -5)] = result
+            elseif not ok then
+              cmdLoadErrors[#cmdLoadErrors + 1] = result
             end
+          else
+            cmdLoadErrors[#cmdLoadErrors + 1] = diagnostics.message(lerr, path)
           end
         end
       end
     end
+  end
+end
+
+local function run_foreground(label, fn, opts)
+  local fgToken = nil
+  if unit and unit.call then
+    fgToken = unit.call("aps", "enterForeground", label, opts or api.securityContext())
+  end
+
+  local function finish(ok, err)
+    if unit and unit.call then
+      unit.call("aps", "leaveForeground", fgToken)
+    end
+    view_offset = 0
+    render_terminal()
+    return ok, err
+  end
+
+  local co = coroutine.create(fn)
+  local ok, err = coroutine.resume(co)
+  if not ok then
+    return finish(false, diagnostics.make(err, co, label))
+  end
+
+  while coroutine.status(co) ~= "dead" do
+    local sig = {coroutine.yield()}
+    if sig[1] == "atom_interrupt" then
+      return finish(false, "interrupted")
+    end
+
+    ok, err = coroutine.resume(co, table.unpack(sig))
+    if not ok then
+      return finish(false, diagnostics.make(err, co, label))
+    end
+  end
+
+  return finish(true)
+end
+
+local function drain_task_errors()
+  local count = 0
+  while #cmdLoadErrors > 0 do
+    count = count + 1
+    diagnostics.render(table.remove(cmdLoadErrors, 1), api, {
+      title = "Command load failed"
+    })
+  end
+  if not unit or not unit.call then return count end
+  while true do
+    local item = unit.call("aps", "popError")
+    if not item then return count end
+    count = count + 1
+    diagnostics.render(item, api, {
+      title = "Task crashed: " .. tostring(item.name or "unknown")
+    })
   end
 end
 
@@ -226,31 +481,27 @@ local function read(promptFn)
   local sx, sy = cx, cy
 
   local function redraw()
-    gpu.setBackground(0x000000)
-    gpu.fill(sx, sy, w - sx + 1, 1, " ")
-    gpu.setForeground(0xFFFFFF)
-    gpu.set(sx, sy, unicode.sub(buf, 1, w - sx + 1))
+    redraw_current_line_from(sx, buf, FG, BG)
     local cur_x = sx + unicode.len(unicode.sub(buf, 1, pos))
     local ch = unicode.sub(buf, pos + 1, pos + 1)
     if ch == "" then ch = " " end
-    gpu.setBackground(0xFFFFFF)
-    gpu.setForeground(0x000000)
-    gpu.set(cur_x, sy, ch)
-    gpu.setBackground(0x000000)
-    gpu.setForeground(0xFFFFFF)
+    draw_block_cursor(cur_x, sy, ch)
   end
 
   redraw()
 
   while true do
     local sig = {coroutine.yield()}
-    if sig[1] == "key_down" then
+    if not sig[1] then
+      if drain_task_errors() > 0 then
+        promptFn()
+        sx, sy = cx, cy
+        redraw()
+      end
+    elseif sig[1] == "key_down" then
       local char, code = sig[3], sig[4]
       if code == 28 then
-        gpu.setBackground(0x000000)
-        gpu.setForeground(0xFFFFFF)
-        gpu.fill(sx, sy, w - sx + 1, 1, " ")
-        gpu.set(sx, sy, buf)
+        redraw_current_line_from(sx, buf, FG, BG)
         cx = sx + unicode.len(buf)
         cy = sy
         api.write("\n")
@@ -282,10 +533,7 @@ local function read(promptFn)
             redraw()
           else
             -- Show completions, then redraw prompt
-            gpu.setBackground(0x000000)
-            gpu.setForeground(0xFFFFFF)
-            gpu.fill(sx, sy, w - sx + 1, 1, " ")
-            gpu.set(sx, sy, buf)
+            redraw_current_line_from(sx, buf, FG, BG)
             cx = sx + unicode.len(buf); cy = sy
             api.write("\n")
             local colW = 0
@@ -344,6 +592,9 @@ local function read(promptFn)
       buf = unicode.sub(buf, 1, pos) .. sig[3] .. unicode.sub(buf, pos + 1)
       pos = pos + unicode.len(sig[3])
       redraw()
+    elseif sig[1] == "scroll" then
+      scroll_terminal(sig[5] or 0)
+      if view_offset == 0 then redraw() end
     end
   end
 end
@@ -353,7 +604,27 @@ gpu.setForeground(0x00FF00)
 api.print("Atom OS v1.0 - MES")
 gpu.setForeground(0xFFFFFF)
 
+local function atomUIAutostart()
+  local cfg = fs.readAll("/etc/atomui.cfg")
+  if not cfg then return false end
+  for line in tostring(cfg):gmatch("[^\r\n]+") do
+    local key, value = line:match("^([%w_%.%-]+)%s*=%s*(.-)%s*$")
+    if key == "autostart" then return value == "true" or value == "1" end
+  end
+  return false
+end
+
+if atomUIAutostart() and cmds.atomui then
+  local ok, err = run_foreground("atomui", function()
+    cmds.atomui({}, api)
+  end, commandContext("atomui"))
+  if not ok and err ~= "interrupted" then
+    diagnostics.render(err, api, { title = "AtomUI autostart failed" })
+  end
+end
+
 while true do
+  drain_task_errors()
   local input = read(function()
     gpu.setForeground(0x00FFFF)
     local sym = (current_user == "root") and "#" or "$"
@@ -366,8 +637,13 @@ while true do
   if #args > 0 then
     local cmd = table.remove(args, 1)
     if cmds[cmd] then
-      local ok, err = pcall(cmds[cmd], args, api)
-      if not ok then api.print("Error: " .. tostring(err)) end
+      local ok, err = run_foreground(cmd, function()
+        cmds[cmd](args, api)
+      end, commandContext(cmd))
+      if not ok then
+        if err == "interrupted" then api.print("^C")
+        else diagnostics.render(err, api, { title = "Command crashed: " .. cmd }) end
+      end
     else
       -- Try to run as a .lua script (by path or name in cwd)
       local scriptPath
@@ -386,12 +662,17 @@ while true do
           local scriptEnv = setmetatable({
             print = function(...) api.print(...) end,
           }, {__index = _ENV})
-          local fn, lerr = load(code, "=" .. cmd, "bt", scriptEnv)
+          local fn, lerr = load(code, "=" .. scriptPath, "bt", scriptEnv)
           if fn then
-            local ok2, runerr = pcall(fn, args, api)
-            if not ok2 then api.print("Error: " .. tostring(runerr)) end
+            local ok2, runerr = run_foreground(scriptPath, function()
+              fn(args, api)
+            end, api.securityContext())
+            if not ok2 then
+              if runerr == "interrupted" then api.print("^C")
+              else diagnostics.render(runerr, api, { title = "Script crashed" }) end
+            end
           else
-            api.print("Syntax error: " .. tostring(lerr))
+            diagnostics.render(diagnostics.message(lerr, scriptPath), api, { title = "Syntax error" })
           end
         else
           api.print(cmd .. ": cannot read file")

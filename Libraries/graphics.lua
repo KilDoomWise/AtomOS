@@ -16,4 +16,22 @@ function g.copy(x, y, w, h, tx, ty) return unit.call("agpu", "copy", x, y, w, h,
 function g.getDepth()      return unit.call("agpu", "getDepth")      end
 function g.maxResolution() return unit.call("agpu", "maxResolution") end
 
+function g.getActiveBuffer()        return unit.call("agpu", "getActiveBuffer") end
+function g.setActiveBuffer(index)   return unit.call("agpu", "setActiveBuffer", index) end
+function g.buffers()                return unit.call("agpu", "buffers") end
+function g.allocateBuffer(w, h)     return unit.call("agpu", "allocateBuffer", w, h) end
+function g.freeBuffer(index)        return unit.call("agpu", "freeBuffer", index) end
+function g.freeAllBuffers()         return unit.call("agpu", "freeAllBuffers") end
+function g.totalMemory()            return unit.call("agpu", "totalMemory") end
+function g.freeMemory()             return unit.call("agpu", "freeMemory") end
+function g.getBufferSize(index)     return unit.call("agpu", "getBufferSize", index) end
+function g.bitblt(dst, col, row, w, h, src, fromCol, fromRow)
+  return unit.call("agpu", "bitblt", dst, col, row, w, h, src, fromCol, fromRow)
+end
+
+function g.hasBufferAPI()
+  local active = g.getActiveBuffer()
+  return active ~= nil
+end
+
 return g

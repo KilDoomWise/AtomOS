@@ -27,12 +27,16 @@ function env.create()
   e.rawset = rawset
   e.rawequal = rawequal
   e.rawlen = rawlen
+  if debug and debug.traceback then
+    e.debug = { traceback = debug.traceback }
+  end
   e._G = e
 
   e.require = function(path)
-    local code = u.call("atfs", "readAll", "/Libraries/" .. path .. ".lua")
+    local libPath = "/Libraries/" .. path .. ".lua"
+    local code = u.call("atfs", "readAll", libPath)
     if not code then e.error("Library not found: " .. path) end
-    local fn = assert(load(code, "=" .. path, "bt", e))
+    local fn = assert(load(code, "=" .. libPath, "bt", e))
     return fn()
   end
   

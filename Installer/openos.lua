@@ -23,16 +23,43 @@ local BASE = "https://raw.githubusercontent.com/KilDoomWise/AtomOS/refs/heads/ma
 
 local FILES = {
   "init.lua",
-  "System/kernel.lua",
-  "System/aps.lua",
-  "System/atfs.lua",
+
   "System/agpu.lua",
   "System/aio.lua",
+  "System/aps.lua",
+  "System/atfs.lua",
+  "System/atomui.lua",
   "System/envbuilder.lua",
+  "System/kernel.lua",
   "System/unit.lua",
+
+  "Apps/AtomUI.app/buffer.lua",
+  "Apps/AtomUI.app/desktop.lua",
+  "Apps/AtomUI.app/launcher.lua",
+  "Apps/AtomUI.app/main.lua",
+  "Apps/AtomUI.app/theme.lua",
+  "Apps/AtomUI.app/widgets.lua",
+  "Apps/AtomUI.app/windows.lua",
+  "Apps/Calculator.app/atomapp.lua",
+  "Apps/Edit.app/core.lua",
+  "Apps/Edit.app/data/settings.lua",
+  "Apps/Edit.app/input.lua",
+  "Apps/Edit.app/main.lua",
+  "Apps/Edit.app/syntax.lua",
+  "Apps/Edit.app/ui.lua",
+  "Apps/Files.app/atomapp.lua",
   "Apps/MES.app/main.lua",
+  "Apps/Settings.app/atomapp.lua",
+  "Apps/TaskManager.app/atomapp.lua",
+  "Apps/Terminal.app/atomapp.lua",
+  "Apps/TextEdit.app/atomapp.lua",
+
+  "Libraries/applauncher.lua",
   "Libraries/atomui.lua",
+  "Libraries/atomui_node.lua",
   "Libraries/auth.lua",
+  "Libraries/diagnostics.lua",
+  "Libraries/doublebuffer.lua",
   "Libraries/event.lua",
   "Libraries/filesystem.lua",
   "Libraries/graphics.lua",
@@ -40,10 +67,13 @@ local FILES = {
   "Libraries/io.lua",
   "Libraries/process.lua",
   "Libraries/unicode.lua",
+
+  "Libraries/MES/atomui.lua",
   "Libraries/MES/cat.lua",
   "Libraries/MES/cd.lua",
   "Libraries/MES/clear.lua",
   "Libraries/MES/cp.lua",
+  "Libraries/MES/doc.lua",
   "Libraries/MES/echo.lua",
   "Libraries/MES/edit.lua",
   "Libraries/MES/fetch.lua",
@@ -60,6 +90,7 @@ local FILES = {
   "Libraries/MES/pwd.lua",
   "Libraries/MES/reboot.lua",
   "Libraries/MES/rm.lua",
+  "Libraries/MES/run.lua",
   "Libraries/MES/shutdown.lua",
   "Libraries/MES/su.lua",
   "Libraries/MES/tree.lua",
@@ -68,6 +99,12 @@ local FILES = {
   "Libraries/MES/userdel.lua",
   "Libraries/MES/wget.lua",
   "Libraries/MES/whoami.lua",
+}
+
+local DEFAULT_FILES = {
+  ["etc/atomui.cfg"] = "autostart=true\nheight=50\nwidth=160\n",
+  ["etc/hostname"] = "atom\n",
+  ["etc/passwd"] = "# AtomOS passwd\nroot::0:/root\n",
 }
 
 -- ── Colors ───────────────────────────────────────────────────────────────────
@@ -266,12 +303,84 @@ end
 -- ── Core FS & Network Logic ────────────────────────────────────────────────────
 local function formatDrive(addr)
   local proxy = component.proxy(addr)
-  local list = proxy.list("/")
-  if list then
+  local function joinPath(a, b)
+    if a == "/" then return "/" .. b end
+    return a .. "/" .. b
+  end
+  local function removeTree(path)
+    local ok, list = pcall(proxy.list, path)
+    if ok and list then
+      for _, entry in ipairs(list) do
+        removeTree(joinPath(path, tostring(entry):gsub("/$", "")))
+      end
+    end
+    if path ~= "/" then pcall(proxy.remove, path) end
+  end
+  local ok, list = pcall(proxy.list, "/")
+  if ok and list then
     for _, file in ipairs(list) do
-      proxy.remove(file)
+      removeTree("/" .. tostring(file):gsub("/$", ""))
     end
   end
+end
+
+local function ensureDirs(addr, path)
+  local parts = {}
+  for p in path:gmatch("[^/]+") do parts[#parts + 1] = p end
+  table.remove(parts)
+  local dir = ""
+  for _, p in ipairs(parts) do
+    dir = dir .. "/" .. p
+    pcall(component.invoke, addr, "makeDirectory", dir)
+  end
+end
+
+local function readRequest(req)
+  local chunks, total = {}, 0
+  local deadline = computer.uptime() + 45
+  while true do
+    local ok, chunk = pcall(req.read, math.huge)
+    if ok then
+      if chunk == nil then break end
+      if #chunk > 0 then
+        chunks[#chunks + 1] = chunk
+        total = total + #chunk
+        deadline = computer.uptime() + 15
+      else
+        sleep(0.05)
+      end
+    else
+      local msg = tostring(chunk)
+      if msg:find("not connected", 1, true) and computer.uptime() < deadline then
+        sleep(0.05)
+      else
+        return nil, msg
+      end
+    end
+    if computer.uptime() > deadline then return nil, "network timeout" end
+  end
+
+  local data = table.concat(chunks)
+  if total <= 0 then return nil, "empty response" end
+  if data:match("^404:%s*Not Found") then return nil, "not found in repository" end
+  return data
+end
+
+local function download(url)
+  local lastErr = "unknown error"
+  for attempt = 1, 3 do
+    local ok, req, reason = pcall(inet.request, url)
+    if ok and req then
+      local data, err = readRequest(req)
+      pcall(req.close)
+      if data then return true, data end
+      lastErr = err or lastErr
+    else
+      lastErr = tostring(ok and reason or req)
+    end
+    sleep(0.35 * attempt)
+  end
+  return false, lastErr
 end
 
 local function downloadAndWrite(addr, url, path)
@@ -317,6 +426,37 @@ local function downloadAndWrite(addr, url, path)
 
   pcall(req.close)
   component.invoke(addr, "close", handle)
+  return true
+end
+
+local function downloadAndWriteSafe(addr, url, path)
+  local ok, data = download(url)
+  if not ok then return false, tostring(data) end
+
+  ensureDirs(addr, path)
+
+  local handle, err = component.invoke(addr, "open", "/" .. path, "w")
+  if not handle then return false, "open err: " .. tostring(err) end
+
+  for i = 1, #data, 8192 do
+    local written, writeErr = component.invoke(addr, "write", handle, data:sub(i, i + 8191))
+    if not written then
+      component.invoke(addr, "close", handle)
+      return false, "write err: " .. tostring(writeErr)
+    end
+  end
+
+  component.invoke(addr, "close", handle)
+  return true
+end
+
+local function writeText(addr, path, data)
+  ensureDirs(addr, path)
+  local handle, err = component.invoke(addr, "open", "/" .. path, "w")
+  if not handle then return false, "open err: " .. tostring(err) end
+  local written, writeErr = component.invoke(addr, "write", handle, data or "")
+  component.invoke(addr, "close", handle)
+  if not written then return false, "write err: " .. tostring(writeErr) end
   return true
 end
 
@@ -371,18 +511,27 @@ local function doInstall(drive)
   for idx, file in ipairs(FILES) do
     drawProgress(idx - 1, file, true)
 
-    local ok, err = downloadAndWrite(drive.addr, BASE .. file, file)
+    local ok, err = downloadAndWriteSafe(drive.addr, BASE .. file, file)
 
     if not ok then
       pushLog("  ✘  " .. file .. "  (" .. tostring(err) .. ")", C.ERR)
       statusBar("FATAL: " .. tostring(err), C.ERR)
       sleep(4)
-      return false, "failed: " .. file
+      return false, "failed: " .. file .. " (" .. tostring(err) .. ")"
     end
 
     drawProgress(idx, file, false)
     pushLog("  ✔  " .. file, 0x2A5C2A)
     statusBar("")
+  end
+
+  for path, data in pairs(DEFAULT_FILES) do
+    local ok, err = writeText(drive.addr, path, data)
+    if not ok then
+      pushLog("  ✘  " .. path .. "  (" .. tostring(err) .. ")", C.ERR)
+      return false, "failed: " .. path .. " (" .. tostring(err) .. ")"
+    end
+    pushLog("  ✔  " .. path, 0x2A5C2A)
   end
 
   return true

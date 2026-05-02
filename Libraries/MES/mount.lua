@@ -47,8 +47,12 @@ return function(args, api)
 
   -- -r / --rescan: re-discover connected filesystems
   if args[1] == "-r" or args[1] == "--rescan" then
-    unit.call("atfs", "rescan")
-    api.print("Rescanned connected drives. Run 'mount' to see the list.")
+    local ok, err = unit.call("atfs", "rescan")
+    if ok then
+      api.print("Rescanned connected drives. Run 'mount' to see the list.")
+    else
+      api.print("mount: " .. tostring(err))
+    end
     return
   end
 

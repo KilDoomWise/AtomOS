@@ -51,6 +51,77 @@ local function scan()
 end
 scan()
 
+local function currentContext()
+  local aps = atom and atom.ring1 and atom.ring1.aps
+  if aps and aps.currentContext then return aps.currentContext() end
+  return nil
+end
+
+local function hasCap(cap)
+  local aps = atom and atom.ring1 and atom.ring1.aps
+  if aps and aps.hasCap then return aps.hasCap(cap) end
+  return true
+end
+
+local function isPrivileged()
+  local ctx = currentContext()
+  if not ctx then return true end
+  return ctx.root or ctx.trusted or (ctx.caps and ctx.caps["*"]) or false
+end
+
+local function isWriteMode(mode)
+  mode = tostring(mode or "r")
+  return mode:find("w", 1, true) or mode:find("a", 1, true)
+end
+
+local PROTECTED_PATHS = {
+  "/System",
+  "/Libraries",
+  "/Apps",
+  "/Installer",
+  "/etc",
+  "/dev",
+  "/root",
+  "/init.lua"
+}
+
+local function pathIn(parent, p)
+  return p == parent or p:sub(1, #parent + 1) == parent .. "/"
+end
+
+local function canWritePath(p)
+  p = norm(p)
+  if isPrivileged() or hasCap("fs.system") then return true end
+  if p == "/" then return false, "protected path: /" end
+
+  for _, protected in ipairs(PROTECTED_PATHS) do
+    if pathIn(protected, p) then
+      return false, "protected path: " .. p
+    end
+  end
+
+  local ctx = currentContext() or {}
+  local owner = p:match("^/home/([^/]+)")
+  if p == "/home" or (owner and owner ~= ctx.user) then
+    return false, "permission denied: " .. p
+  end
+
+  return true
+end
+
+local function canUseHandle(info, writing)
+  if not info then return false, "bad handle" end
+  if isPrivileged() then return true end
+  local ctx = currentContext()
+  if info.owner and ctx and info.owner ~= ctx.id then
+    return false, "handle owned by another context"
+  end
+  if writing and not info.write then
+    return false, "handle is not writable"
+  end
+  return true
+end
+
 -- Find the best (longest matching) mount point for a path.
 -- Returns: component_address, relative_path_on_that_component
 local function resolve(p)
@@ -80,12 +151,22 @@ local function devNodeId(p)  return p:match("^/dev/([^/]+)$") end
 local atfs = {}
 
 -- Read-only views of internal state (for mount command etc.)
-function atfs.getMounts()  return mounts  end
-function atfs.getDevices() return devices end
+function atfs.getMounts()
+  local out = {}
+  for k, v in pairs(mounts) do out[k] = v end
+  return out
+end
+
+function atfs.getDevices()
+  local out = {}
+  for k, v in pairs(devices) do out[k] = v end
+  return out
+end
 
 -- Mount a filesystem component at a mount point.
 -- addr can be a full UUID or a 5-char short ID (as listed in /dev/).
 function atfs.mount(point, addr)
+  if not hasCap("fs.mount") then return false, "access denied: fs.mount" end
   if not point or not addr then return false, "invalid args" end
   point = norm(point)
   -- Resolve short ID to full address if needed
@@ -93,12 +174,17 @@ function atfs.mount(point, addr)
     addr = devices[addr]
     if not addr then return false, "unknown device short-id" end
   end
+  local okType, ctype = pcall(component.type, addr)
+  if not okType or ctype ~= "filesystem" then
+    return false, "not a filesystem component"
+  end
   mounts[point] = addr
   return true
 end
 
 -- Unmount a path. Root cannot be unmounted.
 function atfs.umount(point)
+  if not hasCap("fs.mount") then return false, "access denied: fs.mount" end
   point = norm(point)
   if point == "/" then return false, "cannot unmount root" end
   if not mounts[point] then return false, "not a mount point: " .. point end
@@ -145,6 +231,7 @@ end
 -- Re-scan for connected filesystem components (hot-plug).
 -- Mounts are preserved; only the device registry is refreshed.
 function atfs.rescan()
+  if not hasCap("fs.mount") then return false, "access denied: fs.mount" end
   scan()
   return true
 end
@@ -180,6 +267,7 @@ end
 
 -- Save all non-root mounts to fstab
 function atfs.saveFstab()
+  if not hasCap("fs.mount") then return false, "access denied: fs.mount" end
   local lines = { "# AtomOS fstab - managed automatically, do not edit by hand" }
   for mp, addr in pairs(mounts) do
     if mp ~= "/" then
@@ -279,40 +367,62 @@ end
 function atfs.open(p, m)
   p = norm(p)
   if devNodeId(p) then return nil end   -- cannot open a device node directly
+  if isWriteMode(m) then
+    local ok, err = canWritePath(p)
+    if not ok then return nil, err end
+  end
   local addr, rel = resolve(p)
   local raw = ci(addr, "open", rel, m or "r")
   if not raw then return nil end
   seq = seq + 1
-  handles[seq] = { addr = addr, raw = raw }
+  local ctx = currentContext()
+  handles[seq] = {
+    addr = addr,
+    raw = raw,
+    path = p,
+    mode = m or "r",
+    write = isWriteMode(m),
+    owner = ctx and ctx.id or nil
+  }
   return seq
 end
 
 function atfs.read(h, c)
   local info = handles[h]
-  if not info then return nil end
+  local ok, err = canUseHandle(info, false)
+  if not ok then return nil, err end
   return ci(info.addr, "read", info.raw, c or math.huge)
 end
 
 function atfs.write(h, d)
   local info = handles[h]
-  if not info then return nil end
+  local ok, err = canUseHandle(info, true)
+  if not ok then return nil, err end
   return ci(info.addr, "write", info.raw, d)
 end
 
 function atfs.close(h)
   local info = handles[h]
-  if not info then return end
+  local ok, err = canUseHandle(info, false)
+  if not ok then return false, err end
   ci(info.addr, "close", info.raw)
   handles[h] = nil
+  return true
 end
 
 function atfs.makeDir(p)
-  local addr, rel = resolve(norm(p))
+  p = norm(p)
+  local ok, err = canWritePath(p)
+  if not ok then return false, err end
+  local addr, rel = resolve(p)
   return ci(addr, "makeDirectory", rel)
 end
 
 function atfs.remove(p)
-  local addr, rel = resolve(norm(p))
+  p = norm(p)
+  local ok, err = canWritePath(p)
+  if not ok then return false, err end
+  local addr, rel = resolve(p)
   return ci(addr, "remove", rel)
 end
 
@@ -329,10 +439,11 @@ function atfs.readAll(p)
 end
 
 function atfs.writeAll(p, data)
-  local h = atfs.open(p, "w")
-  if not h then return false, "cannot open: " .. tostring(p) end
-  atfs.write(h, data)
+  local h, openErr = atfs.open(p, "w")
+  if not h then return false, openErr or ("cannot open: " .. tostring(p)) end
+  local ok, err = atfs.write(h, data)
   atfs.close(h)
+  if not ok then return false, err end
   return true
 end
 

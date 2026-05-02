@@ -6,9 +6,16 @@ return function(state)
     BG = 0x0D1117, CUR_BG = 0x161B22, FG = 0xE6EDF3, BAR_BG = 0x161B22,
     KEY = 0xFFFFFF, HINT = 0x79C0FF, DIM = 0x8B949E, OK = 0x3FB950,
     GT_DIM = 0x3D444D, GT_CUR = 0x8B949E, KW = 0xFF7B72, BUILTIN = 0xD2A8FF,
-    STR = 0xA5D6FF, CMT = 0x6E7681, NUM = 0xE8B87D, SEL_BG = 0x264F78
+    STR = 0xA5D6FF, CMT = 0x6E7681, NUM = 0xE8B87D, SEL_BG = 0x264F78,
+    FIND_BG = 0x3A3320, FIND_CUR_BG = 0x5A4518,
+    FIND_SCROLL = 0xD29922, SCROLL_MARK = 0x6E7681, STICKY_BG = 0x1F242D,
+    INDENT_GUIDE = 0x252A31, MENU_BG = 0x111820, MENU_SEL_BG = 0x264F78,
+    NEW_BG = 0x202A35, POPUP_BG = 0x101820, DIRTY = 0xD29922,
+    INPUT_BG = 0x1A2430, INPUT_FOCUS_BG = 0x263447
   }
   syntax.C = C
+  syntax.cache = {}
+  syntax.cacheN = 0
 
   local LUA_KW = {
     ["local"]=1, ["function"]=1, ["return"]=1, ["if"]=1, ["then"]=1,
@@ -26,6 +33,7 @@ return function(state)
   }
 
   function syntax.highlight(line)
+    if syntax.cache[line] then return syntax.cache[line] end
     local segs = {}
     local len = unicode.len(line)
     local i = 1
@@ -64,6 +72,9 @@ return function(state)
         i = i + 1
       end
     end
+    syntax.cache[line] = segs
+    syntax.cacheN = syntax.cacheN + 1
+    if syntax.cacheN > 600 then syntax.cache = {}; syntax.cacheN = 0 end
     return segs
   end
 

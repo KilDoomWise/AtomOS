@@ -1,6 +1,7 @@
 return function(args, api)
   local fs = require("filesystem")
   local proc = require("process")
+  local diagnostics = require("diagnostics")
   
   local path = args[1]
   if not path then
@@ -19,10 +20,15 @@ return function(args, api)
     return
   end
 
-  local ok, err = proc.spawn(target)
+  local ctx = api.securityContext and api.securityContext() or nil
+  local ok, err = proc.spawn(target, ctx)
   if ok then
     api.print("Launched: " .. target)
   else
-    api.print("Launch failed: " .. tostring(err))
+    if tostring(err):match(":%d+:") then
+      diagnostics.render(diagnostics.message(err, target), api, { title = "Launch failed" })
+    else
+      api.print("Launch failed: " .. tostring(err))
+    end
   end
 end

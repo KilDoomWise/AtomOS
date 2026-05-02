@@ -2,6 +2,7 @@ local _args, _api = ...
 local fs = require("filesystem")
 local event = require("event")
 local gpu = require("graphics")
+local dbOk, doublebuffer = pcall(require, "doublebuffer")
 
 local state = {
   args = _args, api = _api,
@@ -9,10 +10,17 @@ local state = {
   cx = 1, cy = 1, scrollX = 0, scrollY = 0,
   sel = nil, running = true, modified = false,
   w = 0, h = 0, gutterW = 4, sidebarW = 0,
-  findTerm = "", ctrlHeld = false, shiftHeld = false,
+  bufferVersion = 0,
+  findTerm = "", findCurrent = nil, findIndex = 0, findTotal = 0, findVersion = 0,
+  replaceTerm = "", replaceCount = 0,
+  showSticky = true, showGuides = true, showFindHighlight = true,
+  showSyntax = true, showScrollMarks = true,
+  ctrlHeld = false, shiftHeld = false,
   menuActive = nil, menuIdx = 1, itemIdx = 1,
   popup = nil, statusMsg = nil, clipboard = "",
-  history = {}, ghostText = nil, lastAction = ""
+  history = {}, redoHistory = {}, fileStates = {},
+  doublebuffer = dbOk and doublebuffer or nil, frameBuffer = nil,
+  ghostText = nil, lastAction = ""
 }
 
 state.w, state.h = gpu.getResolution()

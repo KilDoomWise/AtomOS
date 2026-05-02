@@ -4,6 +4,7 @@ return function(args, api)
     ls = "List directory contents. Usage: ls [path]",
     cd = "Change current directory. Usage: cd <path>",
     cat = "Concatenate and print files. Usage: cat <file>",
+    doc = "Show OpenComputers component docs. Usage: doc <component> [method]",
     echo = "Display a line of text. Usage: echo [text]",
     edit = "Edit a file. Usage: edit <file>",
     mkdir = "Create a directory. Usage: mkdir <path>",
@@ -15,7 +16,8 @@ return function(args, api)
     reboot = "Reboot the system. Usage: reboot",
     shutdown = "Shutdown the system. Usage: shutdown",
     wget = "Download file from URL. Usage: wget <url> <filename>",
-    open = "Launch an .app package. Usage: open <app>",
+    open = "Launch an .app package as a background process. Usage: open <app>",
+    run = "Run an .app package in foreground. Usage: run <name|path.app> [args]",
     process = "List or kill processes. Usage: htop / kill <pid>",
     lua = "Start Lua REPL. Usage: lua"
   }

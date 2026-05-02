@@ -96,6 +96,9 @@ local function boot()
 
     atom.ring1.aio = atom.load("/System/aio.lua")()
     log("AIO Interrupts Hooked")
+
+    atom.ring1.atomui = atom.load("/System/atomui.lua")()
+    log("AtomUI Node Online")
     
     atom.ring1.env = atom.load("/System/envbuilder.lua")()
     local user_env = atom.ring1.env.create()

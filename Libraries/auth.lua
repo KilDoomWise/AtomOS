@@ -77,8 +77,12 @@ function auth.addUser(name, password, uid, home)
   end
   home = home or ("/home/" .. name)
   table.insert(users, { name = name, hash = hash(password or ""), uid = uid, home = home })
-  writePasswd(users)
-  if not fs.exists(home) then fs.makeDir(home) end
+  local ok, err = writePasswd(users)
+  if not ok then return false, err end
+  if not fs.exists(home) then
+    ok, err = fs.makeDir(home)
+    if not ok then return false, err end
+  end
   return true
 end
 
@@ -91,8 +95,7 @@ function auth.delUser(name)
     else table.insert(new, u) end
   end
   if not found then return false, "user not found" end
-  writePasswd(new)
-  return true
+  return writePasswd(new)
 end
 
 function auth.setPassword(name, password)
@@ -100,8 +103,7 @@ function auth.setPassword(name, password)
   for _, u in ipairs(users) do
     if u.name == name then
       u.hash = hash(password or "")
-      writePasswd(users)
-      return true
+      return writePasswd(users)
     end
   end
   return false, "user not found"

@@ -2,6 +2,7 @@ return function(args, api)
   local gpu = require("graphics")
   local fs  = require("filesystem")
   local unicode = require("unicode")
+  local diagnostics = require("diagnostics")
 
   local w, _ = gpu.getResolution()
 
@@ -18,21 +19,14 @@ return function(args, api)
       print = function(...) api.print(...) end,
       io    = { write = function(...) for i = 1, select("#", ...) do api.write(tostring(select(i, ...))) end end },
     }, {__index = _ENV})
-    local fn, lerr = load(code, "=" .. args[1], "bt", scriptEnv)
+    local fn, lerr = load(code, "=" .. path, "bt", scriptEnv)
     if not fn then
-      gpu.setForeground(0xFF6666)
-      api.print("lua: " .. tostring(lerr))
-      gpu.setForeground(0xFFFFFF)
+      diagnostics.render(diagnostics.message(lerr, path), api, { title = "Lua syntax error" })
       return
     end
     local passArgs = {}
     for i = 2, #args do passArgs[#passArgs+1] = args[i] end
-    local ok, runerr = pcall(fn, passArgs, api)
-    if not ok then
-      gpu.setForeground(0xFF6666)
-      api.print("Error: " .. tostring(runerr))
-      gpu.setForeground(0xFFFFFF)
-    end
+    fn(passArgs, api)
     return
   end
 
@@ -137,7 +131,9 @@ return function(args, api)
       fn, err = load(exec_str, "=repl", "t", env)
     end
     if fn then
-      local ok, result = pcall(fn)
+      local ok, result = xpcall(fn, function(e)
+        return diagnostics.make(e, nil, "Lua REPL")
+      end)
       if ok then
         if result ~= nil then
           gpu.setForeground(0xAAFFAA)
@@ -145,14 +141,10 @@ return function(args, api)
           gpu.setForeground(0xFFFFFF)
         end
       else
-        gpu.setForeground(0xFF6666)
-        api.print("Error: " .. tostring(result))
-        gpu.setForeground(0xFFFFFF)
+        diagnostics.render(result, api, { title = "Lua REPL error" })
       end
     else
-      gpu.setForeground(0xFF6666)
-      api.print("Syntax: " .. tostring(err))
-      gpu.setForeground(0xFFFFFF)
+      diagnostics.render(diagnostics.message(err, "Lua REPL"), api, { title = "Lua REPL syntax" })
     end
   end
 end

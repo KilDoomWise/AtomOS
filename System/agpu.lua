@@ -24,4 +24,17 @@ function agpu.copy(x, y, w, h, tx, ty) return agpu.i(agpu.addr, "copy", x, y, w,
 function agpu.getDepth()       return agpu.i(agpu.addr, "getDepth")        end
 function agpu.maxResolution()  return agpu.i(agpu.addr, "maxResolution")   end
 
+function agpu.getActiveBuffer()        return agpu.i(agpu.addr, "getActiveBuffer") end
+function agpu.setActiveBuffer(index)   return agpu.i(agpu.addr, "setActiveBuffer", index) end
+function agpu.buffers()                return agpu.i(agpu.addr, "buffers") end
+function agpu.allocateBuffer(w, h)     return agpu.i(agpu.addr, "allocateBuffer", w, h) end
+function agpu.freeBuffer(index)        return agpu.i(agpu.addr, "freeBuffer", index) end
+function agpu.freeAllBuffers()         return agpu.i(agpu.addr, "freeAllBuffers") end
+function agpu.totalMemory()            return agpu.i(agpu.addr, "totalMemory") end
+function agpu.freeMemory()             return agpu.i(agpu.addr, "freeMemory") end
+function agpu.getBufferSize(index)     return agpu.i(agpu.addr, "getBufferSize", index) end
+function agpu.bitblt(dst, col, row, w, h, src, fromCol, fromRow)
+  return agpu.i(agpu.addr, "bitblt", dst, col, row, w, h, src, fromCol, fromRow)
+end
+
 return agpu
